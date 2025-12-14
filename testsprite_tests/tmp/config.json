@@ -1,0 +1,18 @@
+{
+  "status": "commited",
+  "type": "frontend",
+  "scope": "codebase",
+  "localEndpoint": "http://localhost:3000/home",
+  "loginUser": "contato@beonevision.com",
+  "loginPassword": "M@tthew00",
+  "executionArgs": {
+    "projectName": "receitas-fit-pwa",
+    "projectPath": "C:\\Users\\matpg\\Downloads\\RECEITAS FIT\\receitas-fit-pwa",
+    "testIds": [],
+    "additionalInstruction": "Focus on UX testing for the new features: 1) MiniCalendar scrollable wheel with smooth snap-to-center behavior, test scroll detection and green circle transitions. 2) RecipeCard hover effects, floating animation, and shadow elevations. 3) Verify smooth transitions (500ms) work correctly. 4) Check that calendar auto-centers on click and maintains selected state. 5) Test recipe card image centering and proper display without white spaces.",
+    "envs": {
+      "API_KEY": "sk-user-HgYKBOBmI4Sgeh9hagtEej4hWUmcx9V7-bWtpWgMDc00mO0NadtXRivo0CVRkLqBSoUyF1BiTI-x5swLfrQZ9zGSushtmVqqPEzzZAlDFrMIpMVSXUjidbuvgUaA1GpA0tE"
+    }
+  },
+  "proxy": "http://ff336e55-b174-4864-8ab3-4ce704f591c6:SWdW0ZLyFWEuS1kXLwWCHquaEAx3gDbV@tun.testsprite.com:8080"
+}

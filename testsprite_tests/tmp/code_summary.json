@@ -1,0 +1,88 @@
+{
+  "tech_stack": [
+    "TypeScript",
+    "Next.js 15 (App Router)",
+    "React 19",
+    "Tailwind CSS",
+    "PostgreSQL (Supabase)",
+    "shadcn/ui",
+    "date-fns",
+    "Lucide Icons"
+  ],
+  "features": [
+    {
+      "name": "MiniCalendar - Scrollable Date Picker",
+      "description": "Horizontal scrollable calendar wheel with smooth snap-to-center behavior. Shows 30 days with auto-centering on selected date. Features green highlight circle with shadow for selected day, smooth transitions (500ms), and responsive scroll detection.",
+      "files": [
+        "src/components/ui/mini-calendar.tsx"
+      ]
+    },
+    {
+      "name": "RecipeCard - Enhanced Card Component",
+      "description": "Recipe card with floating effect on hover, elevated shadows, and centered images. Includes favorite toggle, category badge, prep time, calories info, and tags display. Features smooth transitions and hover lift effect.",
+      "files": [
+        "src/components/recipes/RecipeCard.tsx"
+      ]
+    },
+    {
+      "name": "AchievementCard - Progress Tracking",
+      "description": "Compact achievement progress card showing user check-ins, progress bar, and milestone indicators. Includes future feature notice with lock icon.",
+      "files": [
+        "src/components/shared/AchievementCard.tsx"
+      ]
+    },
+    {
+      "name": "Home Page",
+      "description": "Main dashboard showing achievement card, scrollable mini calendar, and recipe of the selected day. Fetches recipes by date range and user selections. Includes quick action buttons for recipes and shopping list.",
+      "files": [
+        "src/app/(app)/home/page.tsx"
+      ]
+    },
+    {
+      "name": "Recipe Hooks",
+      "description": "Custom React hooks for fetching recipes by date range and user's selected recipes. Provides loading states and efficient data fetching.",
+      "files": [
+        "src/hooks/useRecipes.ts"
+      ]
+    },
+    {
+      "name": "Authentication",
+      "description": "Supabase-based authentication with email/password, onboarding flow, and protected routes.",
+      "files": [
+        "src/app/(auth)/login/page.tsx",
+        "src/app/(auth)/signup/page.tsx",
+        "src/app/(auth)/onboarding/page.tsx"
+      ]
+    },
+    {
+      "name": "Recipe Management",
+      "description": "Full recipe browsing, filtering, favoriting, and selection for specific dates. Includes recipe detail view with ingredients and instructions.",
+      "files": [
+        "src/app/(app)/recipes/page.tsx",
+        "src/app/(app)/recipe/[id]/page.tsx"
+      ]
+    },
+    {
+      "name": "Shopping List",
+      "description": "Ingredient aggregation from selected recipes with checkable items and quantity management.",
+      "files": [
+        "src/app/(app)/shopping-list/page.tsx"
+      ]
+    },
+    {
+      "name": "User Profile",
+      "description": "User profile management with account settings and preferences.",
+      "files": [
+        "src/app/(app)/profile/page.tsx"
+      ]
+    },
+    {
+      "name": "Database Schema",
+      "description": "PostgreSQL schema with recipes, user_recipes, ingredients, and favorites tables. Includes RLS policies for security.",
+      "files": [
+        "supabase/migrations/20250110000000_create_recipes_schema.sql",
+        "supabase/migrations/20250110000001_seed_recipes.sql"
+      ]
+    }
+  ]
+}
