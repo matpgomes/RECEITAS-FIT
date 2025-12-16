@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+'use client'
+
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getUserShoppingLists,
   getShoppingListById,
@@ -17,135 +19,167 @@ import {
   addManualItemToDraft,
   updateDraftItem,
   type ShoppingList,
-  type ShoppingListItem
+  type ShoppingListItem,
+  type DraftItem
 } from '@/lib/supabase/queries/shopping-list'
-import { convertRecipeToShoppingList } from '@/lib/shopping-list/smart-converter'
-import type { Recipe } from '@/types/recipe'
+import { toast } from 'sonner'
 
+// Query Keys centralizadas
+export const shoppingListKeys = {
+  all: ['shoppingLists'] as const,
+  lists: (status: string) => [...shoppingListKeys.all, 'list', status] as const,
+  detail: (id: string) => [...shoppingListKeys.all, 'detail', id] as const,
+  items: (id: string) => [...shoppingListKeys.all, 'items', id] as const,
+  draft: () => [...shoppingListKeys.all, 'draft'] as const,
+}
+
+/**
+ * Hook para listas de compras do usuário (com cache)
+ */
 export function useShoppingLists(status: 'active' | 'completed' | 'archived' = 'active') {
-  const [lists, setLists] = useState<ShoppingList[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
 
-  const loadLists = async () => {
-    try {
-      setLoading(true)
-      const data = await getUserShoppingLists(status)
-      setLists(data)
-    } catch (error) {
-      console.error('Error loading shopping lists:', error)
-      setLists([])
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { data: lists = [], isLoading: loading, refetch } = useQuery({
+    queryKey: shoppingListKeys.lists(status),
+    queryFn: () => getUserShoppingLists(status).catch(() => []),
+    staleTime: 2 * 60 * 1000, // 2 minutos
+  })
 
-  useEffect(() => {
-    loadLists()
-  }, [status])
+  const createMutation = useMutation({
+    mutationFn: async ({ recipeId, servings }: { recipeId?: string; servings?: number }) => {
+      return createShoppingList(recipeId, servings)
+    },
+    onSuccess: (newList) => {
+      queryClient.setQueryData(shoppingListKeys.lists(status), (old: ShoppingList[] | undefined) =>
+        old ? [newList, ...old] : [newList]
+      )
+    },
+  })
 
-  const createList = async (recipeId?: string, servings: number = 1) => {
-    const newList = await createShoppingList(recipeId, servings)
-    setLists(prev => [newList, ...prev])
-    return newList
-  }
+  const deleteMutation = useMutation({
+    mutationFn: deleteShoppingList,
+    onMutate: async (listId) => {
+      await queryClient.cancelQueries({ queryKey: shoppingListKeys.lists(status) })
+      const previous = queryClient.getQueryData(shoppingListKeys.lists(status))
+      queryClient.setQueryData(shoppingListKeys.lists(status), (old: ShoppingList[] | undefined) =>
+        old?.filter((list) => list.id !== listId)
+      )
+      return { previous }
+    },
+    onError: (err, listId, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(shoppingListKeys.lists(status), context.previous)
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: shoppingListKeys.lists(status) })
+    },
+  })
 
-  const removeList = async (listId: string) => {
-    await deleteShoppingList(listId)
-    setLists(prev => prev.filter(list => list.id !== listId))
-  }
-
-  const updateStatus = async (listId: string, newStatus: 'active' | 'completed' | 'archived') => {
-    const updated = await updateShoppingListStatus(listId, newStatus)
-    setLists(prev => prev.map(list => list.id === listId ? updated : list))
-    return updated
-  }
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ listId, newStatus }: { listId: string; newStatus: 'active' | 'completed' | 'archived' }) => {
+      return updateShoppingListStatus(listId, newStatus)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shoppingListKeys.all })
+    },
+  })
 
   return {
     lists,
     loading,
-    createList,
-    removeList,
-    updateStatus,
-    refresh: loadLists
+    createList: (recipeId?: string, servings: number = 1) =>
+      createMutation.mutateAsync({ recipeId, servings }),
+    removeList: (listId: string) => deleteMutation.mutateAsync(listId),
+    updateStatus: (listId: string, newStatus: 'active' | 'completed' | 'archived') =>
+      updateStatusMutation.mutateAsync({ listId, newStatus }),
+    refresh: refetch,
   }
 }
 
+/**
+ * Hook para uma lista de compras específica (com cache)
+ */
 export function useShoppingList(listId: string) {
-  const [list, setList] = useState<ShoppingList | null>(null)
-  const [items, setItems] = useState<ShoppingListItem[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
 
-  const loadList = async () => {
-    try {
-      setLoading(true)
-      const [listData, itemsData] = await Promise.all([
-        getShoppingListById(listId),
-        getShoppingListItems(listId)
-      ])
-      setList(listData)
-      setItems(itemsData)
-    } catch (error) {
-      console.error('Error loading shopping list:', error)
-      setList(null)
-      setItems([])
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { data: list = null, isLoading: loadingList } = useQuery({
+    queryKey: shoppingListKeys.detail(listId),
+    queryFn: () => getShoppingListById(listId),
+    enabled: !!listId,
+    staleTime: 2 * 60 * 1000,
+  })
 
-  useEffect(() => {
-    if (listId) {
-      loadList()
-    }
-  }, [listId])
+  const { data: items = [], isLoading: loadingItems } = useQuery({
+    queryKey: shoppingListKeys.items(listId),
+    queryFn: () => getShoppingListItems(listId),
+    enabled: !!listId,
+    staleTime: 1 * 60 * 1000, // 1 minuto - itens mudam mais frequentemente
+  })
 
-  const addItem = async (item: {
-    ingredient_name: string
-    category: string
-    emoji?: string
-    recipe_quantity?: number
-    recipe_unit?: string
-    buy_quantity?: number
-    buy_unit?: string
-    buy_package?: string
-  }) => {
-    const newItem = await addShoppingListItem(listId, item)
-    setItems(prev => [...prev, newItem])
-    return newItem
-  }
+  const loading = loadingList || loadingItems
 
-  const updateItem = async (itemId: string, updates: Partial<ShoppingListItem>) => {
-    const updated = await updateShoppingListItem(itemId, updates)
-    setItems(prev => prev.map(item => item.id === itemId ? updated : item))
-    return updated
-  }
+  const updateItemMutation = useMutation({
+    mutationFn: async ({ itemId, updates }: { itemId: string; updates: Partial<ShoppingListItem> }) => {
+      return updateShoppingListItem(itemId, updates)
+    },
+    onMutate: async ({ itemId, updates }) => {
+      await queryClient.cancelQueries({ queryKey: shoppingListKeys.items(listId) })
+      const previous = queryClient.getQueryData(shoppingListKeys.items(listId))
+      queryClient.setQueryData(shoppingListKeys.items(listId), (old: ShoppingListItem[] | undefined) =>
+        old?.map((item) => (item.id === itemId ? { ...item, ...updates } : item))
+      )
+      return { previous }
+    },
+    onError: (err, variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(shoppingListKeys.items(listId), context.previous)
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: shoppingListKeys.items(listId) })
+    },
+  })
 
-  const toggleItemChecked = async (itemId: string) => {
-    const item = items.find(i => i.id === itemId)
-    if (!item) return
+  const deleteItemMutation = useMutation({
+    mutationFn: deleteShoppingListItem,
+    onMutate: async (itemId) => {
+      await queryClient.cancelQueries({ queryKey: shoppingListKeys.items(listId) })
+      const previous = queryClient.getQueryData(shoppingListKeys.items(listId))
+      queryClient.setQueryData(shoppingListKeys.items(listId), (old: ShoppingListItem[] | undefined) =>
+        old?.filter((item) => item.id !== itemId)
+      )
+      return { previous }
+    },
+    onError: (err, itemId, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(shoppingListKeys.items(listId), context.previous)
+      }
+    },
+  })
 
-    return updateItem(itemId, { is_checked: !item.is_checked })
-  }
-
-  const removeItem = async (itemId: string) => {
-    await deleteShoppingListItem(itemId)
-    setItems(prev => prev.filter(item => item.id !== itemId))
-  }
-
-  const markAllChecked = async (checked: boolean = true) => {
-    await markAllItemsAsChecked(listId, checked)
-    setItems(prev => prev.map(item => ({ ...item, is_checked: checked })))
-  }
-
-  const updateListStatus = async (status: 'active' | 'completed' | 'archived') => {
-    const updated = await updateShoppingListStatus(listId, status)
-    setList(updated)
-    return updated
-  }
+  const markAllMutation = useMutation({
+    mutationFn: async (checked: boolean) => {
+      await markAllItemsAsChecked(listId, checked)
+    },
+    onMutate: async (checked) => {
+      await queryClient.cancelQueries({ queryKey: shoppingListKeys.items(listId) })
+      const previous = queryClient.getQueryData(shoppingListKeys.items(listId))
+      queryClient.setQueryData(shoppingListKeys.items(listId), (old: ShoppingListItem[] | undefined) =>
+        old?.map((item) => ({ ...item, is_checked: checked }))
+      )
+      return { previous }
+    },
+    onError: (err, checked, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(shoppingListKeys.items(listId), context.previous)
+      }
+    },
+  })
 
   // Calcular progresso
   const totalItems = items.length
-  const checkedItems = items.filter(item => item.is_checked).length
+  const checkedItems = items.filter((item) => item.is_checked).length
   const progress = totalItems > 0 ? (checkedItems / totalItems) * 100 : 0
 
   // Agrupar por categoria
@@ -165,155 +199,95 @@ export function useShoppingList(listId: string) {
     totalItems,
     checkedItems,
     itemsByCategory,
-    addItem,
-    updateItem,
-    toggleItemChecked,
-    removeItem,
-    markAllChecked,
-    updateListStatus,
-    refresh: loadList
-  }
-}
-
-/**
- * Gerar lista de compras a partir de uma receita
- */
-export async function generateShoppingListFromRecipe(recipe: Recipe, servings?: number) {
-  // Ajustar ingredientes para o número de porções
-  const multiplier = servings ? servings / recipe.serves_people : 1
-
-  const adjustedIngredients = recipe.ingredients.map(ing => {
-    if (multiplier === 1) return ing
-
-    // Ajustar quantidade
-    const qtyMatch = ing.quantity.match(/^([\d.,\/]+)/)
-    if (qtyMatch) {
-      const originalQty = parseFloat(qtyMatch[1].replace(',', '.'))
-      const newQty = originalQty * multiplier
-      const adjustedQuantity = ing.quantity.replace(qtyMatch[1], newQty.toString())
-
-      return {
-        ...ing,
-        quantity: adjustedQuantity
+    updateItem: (itemId: string, updates: Partial<ShoppingListItem>) =>
+      updateItemMutation.mutateAsync({ itemId, updates }),
+    toggleItemChecked: (itemId: string) => {
+      const item = items.find((i) => i.id === itemId)
+      if (item) {
+        updateItemMutation.mutate({ itemId, updates: { is_checked: !item.is_checked } })
       }
-    }
-
-    return ing
-  }).map(ing => ({
-    ...ing,
-    notes: ing.notes ?? undefined  // Convert null to undefined
-  }))
-
-  // Converter para itens de compra
-  const shoppingItems = await convertRecipeToShoppingList(adjustedIngredients)
-
-  // Buscar ou criar lista ativa
-  const existingLists = await getUserShoppingLists('active')
-  let list: ShoppingList
-
-  if (existingLists.length > 0) {
-    // Usar a primeira lista ativa existente
-    list = existingLists[0]
-  } else {
-    // Criar nova lista
-    list = await createShoppingList(recipe.id, servings || recipe.serves_people)
+    },
+    removeItem: (itemId: string) => deleteItemMutation.mutateAsync(itemId),
+    markAllChecked: (checked: boolean = true) => markAllMutation.mutateAsync(checked),
+    refresh: () => {
+      queryClient.invalidateQueries({ queryKey: shoppingListKeys.detail(listId) })
+      queryClient.invalidateQueries({ queryKey: shoppingListKeys.items(listId) })
+    },
   }
-
-  // Buscar itens já existentes na lista
-  const existingItems = await getShoppingListItems(list.id)
-
-  // Adicionar ou somar itens
-  for (const newItem of shoppingItems) {
-    // Procurar item existente com mesmo nome (case insensitive)
-    const existingItem = existingItems.find(item =>
-      item.ingredient_name.toLowerCase() === newItem.ingredient_name.toLowerCase()
-    )
-
-    // Type assertion: existingItem pode ter campos adicionais do banco
-    const existingItemAny = existingItem as any
-
-    if (existingItem && existingItemAny.recipe_unit === newItem.recipe_unit) {
-      // Item já existe - somar quantidades
-      const totalRecipeQty = (existingItemAny.recipe_quantity || 0) + newItem.recipe_quantity
-
-      // Recalcular melhor embalagem para a quantidade total
-      // Usar o smart converter para recalcular
-      const { convertIngredientToShoppingItem } = await import('@/lib/shopping-list/smart-converter')
-      const recalculated = await convertIngredientToShoppingItem({
-        item: newItem.ingredient_name,
-        quantity: `${totalRecipeQty} ${newItem.recipe_unit}`,
-        notes: existingItemAny.notes
-      })
-
-      // Atualizar item existente (using any for extended fields)
-      await updateShoppingListItem(existingItem.id, {
-        quantity: `${recalculated.buy_quantity} ${recalculated.buy_unit}`
-      } as any)
-    } else {
-      // Item novo - adicionar à lista
-      await addShoppingListItem(list.id, newItem)
-    }
-  }
-
-  return list
 }
 
 /**
- * Hook para gerenciar lista draft (rascunho)
+ * Hook para lista draft / rascunho (com cache)
  */
 export function useDraftList() {
-  const [draftItems, setDraftItems] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
 
-  const loadDraft = async () => {
-    try {
-      setLoading(true)
-      const items = await getDraftItems()
-      setDraftItems(items)
-    } catch (error) {
-      console.error('Error loading draft items:', error)
-      setDraftItems([])
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { data: draftItems = [], isLoading: loading, refetch } = useQuery({
+    queryKey: shoppingListKeys.draft(),
+    queryFn: () => getDraftItems().catch(() => []),
+    staleTime: 1 * 60 * 1000, // 1 minuto
+  })
 
-  useEffect(() => {
-    loadDraft()
-  }, [])
+  const addRecipeMutation = useMutation({
+    mutationFn: async ({ recipeId, servings }: { recipeId: string; servings: number }) => {
+      return addRecipeToDraft(recipeId, servings)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shoppingListKeys.draft() })
+      toast.success('Ingredientes adicionados à lista!')
+    },
+    onError: () => {
+      toast.error('Erro ao adicionar ingredientes')
+    },
+  })
 
-  const addRecipe = async (recipeId: string, servings: number) => {
-    await addRecipeToDraft(recipeId, servings)
-    await loadDraft() // Recarregar para mostrar itens atualizados
-  }
+  const clearMutation = useMutation({
+    mutationFn: clearDraftList,
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: shoppingListKeys.draft() })
+      const previous = queryClient.getQueryData(shoppingListKeys.draft())
+      queryClient.setQueryData(shoppingListKeys.draft(), [])
+      return { previous }
+    },
+    onError: (err, variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(shoppingListKeys.draft(), context.previous)
+      }
+    },
+  })
 
-  const clearDraft = async () => {
-    await clearDraftList()
-    await loadDraft()
-  }
+  const removeItemMutation = useMutation({
+    mutationFn: removeDraftItem,
+    onMutate: async (itemId) => {
+      await queryClient.cancelQueries({ queryKey: shoppingListKeys.draft() })
+      const previous = queryClient.getQueryData(shoppingListKeys.draft())
+      queryClient.setQueryData(shoppingListKeys.draft(), (old: DraftItem[] | undefined) =>
+        old?.filter((item) => item.id !== itemId)
+      )
+      return { previous }
+    },
+    onError: (err, itemId, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(shoppingListKeys.draft(), context.previous)
+      }
+    },
+  })
 
-  const removeItem = async (itemId: string) => {
-    await removeDraftItem(itemId)
-    await loadDraft()
-  }
+  const addManualMutation = useMutation({
+    mutationFn: addManualItemToDraft,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shoppingListKeys.draft() })
+    },
+  })
 
-  const addManualItem = async (item: {
-    ingredient_name: string
-    quantity: string
-    unit?: string
-  }) => {
-    await addManualItemToDraft(item)
-    await loadDraft()
-  }
-
-  const updateItem = async (itemId: string, updates: {
-    ingredient_name?: string
-    quantity?: string
-    unit?: string
-  }) => {
-    await updateDraftItem(itemId, updates)
-    await loadDraft()
-  }
+  const updateItemMutation = useMutation({
+    mutationFn: async ({ itemId, updates }: { itemId: string; updates: { ingredient_name?: string; quantity?: string; unit?: string } }) => {
+      return updateDraftItem(itemId, updates)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shoppingListKeys.draft() })
+    },
+  })
 
   const totalItems = draftItems.length
 
@@ -321,11 +295,14 @@ export function useDraftList() {
     draftItems,
     loading,
     totalItems,
-    addRecipe,
-    clearDraft,
-    removeItem,
-    addManualItem,
-    updateItem,
-    refresh: loadDraft
+    addRecipe: (recipeId: string, servings: number) =>
+      addRecipeMutation.mutateAsync({ recipeId, servings }),
+    clearDraft: () => clearMutation.mutateAsync(),
+    removeItem: (itemId: string) => removeItemMutation.mutateAsync(itemId),
+    addManualItem: (item: { ingredient_name: string; quantity: string; unit?: string }) =>
+      addManualMutation.mutateAsync(item),
+    updateItem: (itemId: string, updates: { ingredient_name?: string; quantity?: string; unit?: string }) =>
+      updateItemMutation.mutateAsync({ itemId, updates }),
+    refresh: refetch,
   }
 }

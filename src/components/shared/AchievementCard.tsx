@@ -1,18 +1,12 @@
 'use client'
 
-import { Trophy, Lock } from 'lucide-react'
+import { Trophy, Lock, Loader2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
+import { useUserAchievements } from '@/hooks/useAchievements'
 
-interface AchievementCardProps {
-  checkins?: number
-  nextMilestone?: number
-}
-
-export function AchievementCard({
-  checkins = 0,
-  nextMilestone = 10
-}: AchievementCardProps) {
+export function AchievementCard() {
+  const { checkins, nextMilestone, loading } = useUserAchievements()
   const progress = (checkins / nextMilestone) * 100
 
   return (
@@ -21,12 +15,16 @@ export function AchievementCard({
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-              <Trophy className="w-5 h-5 text-primary" />
+              {loading ? (
+                <Loader2 className="w-5 h-5 text-primary animate-spin" />
+              ) : (
+                <Trophy className="w-5 h-5 text-primary" />
+              )}
             </div>
             <div>
               <h3 className="text-sm font-semibold">Seu Progresso</h3>
               <p className="text-xs text-muted-foreground">
-                {checkins} check-ins realizados
+                {loading ? 'Carregando...' : `${checkins} check-ins realizados`}
               </p>
             </div>
           </div>
@@ -39,16 +37,15 @@ export function AchievementCard({
               Próxima conquista
             </span>
             <span className="font-medium">
-              {checkins}/{nextMilestone}
+              {loading ? '-/-' : `${checkins}/${nextMilestone}`}
             </span>
           </div>
-          <Progress value={progress} className="h-1.5" />
+          <Progress value={loading ? 0 : progress} className="h-1.5" />
         </div>
 
         {/* Milestone Indicators */}
         <div className="flex justify-between mt-1.5 gap-1">
-          {[...Array(5)].map((_, i) => {
-            const milestone = (i + 1) * 2
+          {[5, 10, 25, 50, 100].map((milestone, i) => {
             const isUnlocked = checkins >= milestone
 
             return (
@@ -58,6 +55,7 @@ export function AchievementCard({
                   flex-1 h-1.5 rounded-full transition-colors
                   ${isUnlocked ? 'bg-primary' : 'bg-gray-200'}
                 `}
+                title={`${milestone} check-ins`}
               />
             )
           })}

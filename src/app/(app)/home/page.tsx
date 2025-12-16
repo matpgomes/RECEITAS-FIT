@@ -9,6 +9,7 @@ import { RecipeCard } from '@/components/recipes/RecipeCard'
 import { AchievementCard } from '@/components/shared/AchievementCard'
 import { MiniCalendar } from '@/components/ui/mini-calendar'
 import { useRecipesByDateRange, useSelectedRecipes } from '@/hooks/useRecipes'
+import { useUserAchievements } from '@/hooks/useAchievements'
 import { getRecipeRatingStats } from '@/lib/supabase/queries/recipes'
 import { Recipe } from '@/types/recipe'
 import { Lock } from 'lucide-react'
@@ -83,8 +84,8 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Achievement Card */}
-      <AchievementCard checkins={0} nextMilestone={10} />
+      {/* Achievement Card com dados reais */}
+      <AchievementCard />
 
       {/* Mini Calendar */}
       <MiniCalendar

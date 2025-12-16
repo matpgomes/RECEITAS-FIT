@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/client'
 import type { Recipe, RecipeFilters, UserSelectedRecipe } from '@/types/recipe'
 
+const RECIPES_PER_PAGE = 10
+
 /**
  * Get all active recipes (only released recipes - featured_date <= today)
  */
@@ -13,7 +15,7 @@ export async function getRecipes(filters?: RecipeFilters) {
     .select('*')
     .eq('is_active', true)
     .lte('featured_date', today) // Only show recipes that have been released
-    .order('featured_date', { ascending: true })
+    .order('featured_date', { ascending: false }) // Mais recentes primeiro
 
   // Apply filters
   if (filters?.category) {
@@ -33,10 +35,13 @@ export async function getRecipes(filters?: RecipeFilters) {
   }
 
   if (filters?.excludeAllergens && filters.excludeAllergens.length > 0) {
-    // Check if allergens array doesn't contain any of the excluded allergens
     filters.excludeAllergens.forEach((allergen) => {
       query = query.not('allergens', 'cs', `{${allergen}}`)
     })
+  }
+
+  if (filters?.searchQuery) {
+    query = query.ilike('title', `%${filters.searchQuery}%`)
   }
 
   const { data, error } = await query
@@ -47,6 +52,67 @@ export async function getRecipes(filters?: RecipeFilters) {
   }
 
   return data as Recipe[]
+}
+
+/**
+ * Get recipes paginated (10 per page, most recent first)
+ */
+export async function getRecipesPaginated(
+  page: number = 0,
+  filters?: RecipeFilters
+): Promise<{ recipes: Recipe[]; hasMore: boolean }> {
+  const supabase = createClient()
+  const today = new Date().toISOString().split('T')[0]
+  const from = page * RECIPES_PER_PAGE
+  const to = from + RECIPES_PER_PAGE - 1
+
+  let query = supabase
+    .from('recipes')
+    .select('*', { count: 'exact' })
+    .eq('is_active', true)
+    .lte('featured_date', today)
+    .order('featured_date', { ascending: false }) // Mais recentes primeiro
+    .range(from, to)
+
+  // Apply filters
+  if (filters?.category) {
+    query = query.eq('category', filters.category)
+  }
+
+  if (filters?.tags && filters.tags.length > 0) {
+    query = query.contains('tags', filters.tags)
+  }
+
+  if (filters?.maxPrepTime) {
+    query = query.lte('prep_time_minutes', filters.maxPrepTime)
+  }
+
+  if (filters?.maxCalories) {
+    query = query.lte('calories_fit', filters.maxCalories)
+  }
+
+  if (filters?.excludeAllergens && filters.excludeAllergens.length > 0) {
+    filters.excludeAllergens.forEach((allergen) => {
+      query = query.not('allergens', 'cs', `{${allergen}}`)
+    })
+  }
+
+  if (filters?.searchQuery) {
+    query = query.ilike('title', `%${filters.searchQuery}%`)
+  }
+
+  const { data, count, error } = await query
+
+  if (error) {
+    console.error('Error fetching paginated recipes:', error)
+    throw error
+  }
+
+  const recipes = data as Recipe[]
+  const totalFetched = (page + 1) * RECIPES_PER_PAGE
+  const hasMore = count ? totalFetched < count : false
+
+  return { recipes, hasMore }
 }
 
 /**
@@ -150,14 +216,17 @@ export async function addFavoriteRecipe(recipeId: string) {
 
   const { error } = await supabase
     .from('user_favorite_recipes')
-    .insert({
-      user_id: user.id,
-      recipe_id: recipeId,
-    })
+    .upsert(
+      {
+        user_id: user.id,
+        recipe_id: recipeId,
+      },
+      { onConflict: 'user_id, recipe_id', ignoreDuplicates: true }
+    )
 
   if (error) {
     console.error('Error adding favorite:', error)
-    throw error
+    throw error // Agora lança o erro real se não for duplicidade
   }
 
   return true

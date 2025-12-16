@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { Heart, Clock, Flame } from 'lucide-react'
@@ -19,7 +19,7 @@ interface RecipeCardProps {
   className?: string
 }
 
-export function RecipeCard({
+export const RecipeCard = memo(function RecipeCard({
   recipe,
   isFavorite = false,
   onToggleFavorite,
@@ -162,4 +162,4 @@ export function RecipeCard({
       </Card>
     </Link>
   )
-}
+})

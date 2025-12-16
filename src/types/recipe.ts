@@ -71,4 +71,5 @@ export interface RecipeFilters {
   maxPrepTime?: number
   maxCalories?: number
   excludeAllergens?: string[]
+  searchQuery?: string
 }
