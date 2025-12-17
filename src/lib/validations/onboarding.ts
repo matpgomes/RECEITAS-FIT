@@ -3,16 +3,16 @@ import { z } from 'zod'
 // Step 1: Vamos Conhecer Você
 export const step1Schema = z.object({
   name: z.string().min(2, 'Nome deve ter pelo menos 2 caracteres'),
-  age: z.number()
+  age: z.coerce.number()
     .min(18, 'Idade mínima: 18 anos')
     .max(120, 'Idade máxima: 120 anos'),
-  height_cm: z.number()
+  height_cm: z.coerce.number()
     .min(100, 'Altura mínima: 100cm')
     .max(250, 'Altura máxima: 250cm'),
-  current_weight_kg: z.number()
+  current_weight_kg: z.coerce.number()
     .min(30, 'Peso mínimo: 30kg')
     .max(300, 'Peso máximo: 300kg'),
-  goal_weight_kg: z.number()
+  goal_weight_kg: z.coerce.number()
     .min(30, 'Peso mínimo: 30kg')
     .max(300, 'Peso máximo: 300kg'),
 })
@@ -26,7 +26,7 @@ export const step2Schema = z.object({
   main_goal: z
     .enum(['fast_weight_loss', 'healthy_weight_loss', 'maintain_energy', 'improve_health'])
     .optional(),
-  home_meals_per_week: z.number()
+  home_meals_per_week: z.coerce.number()
     .min(0, 'Mínimo: 0 refeições')
     .max(21, 'Máximo: 21 refeições')
     .optional(),
@@ -34,11 +34,11 @@ export const step2Schema = z.object({
 
 // Step 3: Quase Lá!
 export const step3Schema = z.object({
-  waist_cm: z.number()
+  waist_cm: z.coerce.number()
     .min(40, 'Cintura mínima: 40cm')
     .max(200, 'Cintura máxima: 200cm')
     .optional(),
-  hip_cm: z.number()
+  hip_cm: z.coerce.number()
     .min(40, 'Quadril mínimo: 40cm')
     .max(200, 'Quadril máximo: 200cm')
     .optional(),
