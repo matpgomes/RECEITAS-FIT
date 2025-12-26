@@ -1,0 +1,1378 @@
+# BRIEFING: Refatoração Completa do Fluxo de Conclusão de Receitas
+
+## CONTEXTO
+Refatorar sistema de conclusão de receitas eliminando paralisia de decisão. Implementar gamificação progressiva onde a recompensa é consequência, não obstáculo.
+
+## PROBLEMA ATUAL
+1. Usuário enfrenta dupla decisão simultânea (conclusão rápida vs completa)
+2. Pontuação exposta prematuramente cria fricção
+3. Dois fluxos competindo em vez de progressão natural
+
+## SOLUÇÃO: FLUXO PROGRESSIVO EM 3 ETAPAS
+
+---
+
+## ETAPA 1: AÇÃO PRIMÁRIA (Durante a Receita)
+
+### Comportamento
+- Botão único, proeminente
+- SEM menção a pontos
+- Label: "Finalizar Receita"
+- Ao clicar: marca receita como concluída + navega para Etapa 2
+
+### Specs de Design
+- Botão fixo na parte inferior
+- Estilo: Primary CTA (tema magenta/pink)
+- Sem informações secundárias
+
+### TypeScript Interface
+```typescript
+// components/RecipeCompletionButton.tsx
+interface RecipeCompletionButtonProps {
+  recipeId: string;
+  onComplete: () => void;
+}
+```
+
+---
+
+## ETAPA 2: CONFIRMAÇÃO E MICRO-VITÓRIA
+
+### Comportamento
+- Exibir APÓS salvar conclusão no DB
+- Animação de celebração (confetti/sucesso)
+- Adicionar 5 pontos ao usuário ANTES de exibir tela
+- Duração mínima: 1.5s (reforço emocional)
+- Não permite voltar (prevenir duplicatas)
+
+### Elementos Visuais
+```
+🎉 Receita concluída!
+Você ganhou 5 pontos
+
+[Botão: Continuar]
+```
+
+### TypeScript Interface
+```typescript
+// screens/RecipeCompletionConfirmation.tsx
+interface CompletionConfirmationProps {
+  recipeId: string;
+  basePoints: 5;
+  completedAt: Date;
+  onContinue: () => void;
+}
+```
+
+---
+
+## ETAPA 3: ENGAJAMENTO PROGRESSIVO (Opcional)
+
+### Layout da Tela
+
+#### HEADER
+```
+💎 Quer ganhar mais pontos?
+Leva menos de 1 minuto
+
+[Barra de Progresso Visual]
+■■□□□ 10 / 30 pontos
+```
+
+#### SEÇÃO 1: AVALIAÇÃO (Auto-expandida)
+```
+⭐⭐⭐⭐⭐
+O que achou da receita?
+
+💎 +10 pontos
+```
+
+**Comportamento:**
+- Seção aberta por padrão
+- 5 estrelas pré-selecionadas
+- Ao clicar em qualquer estrela: registra imediatamente
+- Adiciona 10 pontos ao mudar avaliação
+
+#### SEÇÃO 2: FOTO (Colapsada)
+```
+📷 Adicionar foto
+Mostre como ficou!
+
+💎 +10 pontos
+```
+
+**Comportamento:**
+- Abre câmera/galeria
+- Preview antes de confirmar
+- Upload assíncrono (não bloqueia conclusão)
+
+#### SEÇÃO 3: COMENTÁRIO (Colapsada)
+```
+[Input multiline]
+Placeholder: "Alguma dica, modificação ou resultado?"
+
+[Contador de caracteres: 0/20]
+💎 +10 pontos
+```
+
+**Comportamento:**
+- Validação em tempo real
+- Barra de progresso de caracteres
+- Pontos adicionados apenas ao atingir 20 caracteres
+
+#### CTA DINÂMICO (Rodapé fixo)
+```
+Lógica do label:
+- 0 pontos ganhos: "Concluir"
+- 10+ pontos ganhos: "Concluir (+10 pontos)"
+- 20+ pontos ganhos: "Concluir (+20 pontos)"
+- 30 pontos ganhos: "Concluir (+30 pontos)"
+```
+
+**Comportamento:**
+- Sempre habilitado (nunca disabled)
+- Salva todos os dados preenchidos
+- Adiciona pontos pendentes ao total do usuário
+- Navega para home/feed
+
+---
+
+## ESTRUTURA DE DADOS
+
+### Schema SQL
+```sql
+CREATE TABLE recipe_completions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES users(id) NOT NULL,
+  recipe_id UUID REFERENCES recipes(id) NOT NULL,
+  completed_at TIMESTAMPTZ DEFAULT NOW(),
+  
+  -- Dados de engajamento (nullable)
+  rating INTEGER CHECK (rating >= 1 AND rating <= 5),
+  photo_url TEXT,
+  comment TEXT,
+  comment_length INTEGER,
+  
+  -- Pontos concedidos
+  base_points INTEGER DEFAULT 5,
+  rating_points INTEGER DEFAULT 0,
+  photo_points INTEGER DEFAULT 0,
+  comment_points INTEGER DEFAULT 0,
+  total_points INTEGER GENERATED ALWAYS AS 
+    (base_points + rating_points + photo_points + comment_points) STORED,
+  
+  -- Metadados
+  engagement_completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  
+  UNIQUE(user_id, recipe_id)
+);
+
+-- Índices
+CREATE INDEX idx_recipe_completions_user ON recipe_completions(user_id);
+CREATE INDEX idx_recipe_completions_recipe ON recipe_completions(recipe_id);
+CREATE INDEX idx_recipe_completions_completed_at ON recipe_completions(completed_at);
+```
+
+### TypeScript Types
+```typescript
+// types/recipe-completion.ts
+
+export interface RecipeCompletion {
+  id: string;
+  userId: string;
+  recipeId: string;
+  completedAt: Date;
+  
+  // Engajamento
+  rating?: number;
+  photoUrl?: string;
+  comment?: string;
+  commentLength?: number;
+  
+  // Pontuação
+  basePoints: number;
+  ratingPoints: number;
+  photoPoints: number;
+  commentPoints: number;
+  totalPoints: number;
+  
+  // Metadados
+  engagementCompletedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface EngagementData {
+  rating?: number;
+  photoUri?: string;
+  comment?: string;
+}
+
+export interface EngagementProgress {
+  pointsEarned: number;
+  maxPoints: 30;
+  breakdown: {
+    rating: { completed: boolean; points: 10 };
+    photo: { completed: boolean; points: 10 };
+    comment: { completed: boolean; points: 10 };
+  };
+}
+```
+
+---
+
+## LÓGICA DE BACKEND
+
+### Service: Conclusão Inicial
+```typescript
+// services/recipe-completion.service.ts
+
+import { supabase } from '@/lib/supabase';
+import { RecipeCompletion } from '@/types/recipe-completion';
+
+export async function completeRecipe(
+  userId: string, 
+  recipeId: string
+): Promise<RecipeCompletion> {
+  try {
+    // 1. Criar registro de conclusão
+    const { data: completion, error: completionError } = await supabase
+      .from('recipe_completions')
+      .insert({
+        user_id: userId,
+        recipe_id: recipeId,
+        base_points: 5
+      })
+      .select()
+      .single();
+
+    if (completionError) throw completionError;
+
+    // 2. Adicionar pontos ao usuário
+    const { error: pointsError } = await supabase.rpc('add_user_points', {
+      user_id: userId,
+      points: 5,
+      source: 'recipe_completion',
+      reference_id: completion.id
+    });
+
+    if (pointsError) throw pointsError;
+
+    // 3. Registrar atividade no feed (se aplicável)
+    await createFeedActivity({
+      userId,
+      type: 'recipe_completed',
+      recipeId,
+      points: 5
+    });
+
+    return completion;
+  } catch (error) {
+    console.error('Erro ao completar receita:', error);
+    throw error;
+  }
+}
+
+// Helper para atividade no feed
+async function createFeedActivity(params: {
+  userId: string;
+  type: string;
+  recipeId: string;
+  points: number;
+}) {
+  const { error } = await supabase
+    .from('feed_activities')
+    .insert({
+      user_id: params.userId,
+      activity_type: params.type,
+      recipe_id: params.recipeId,
+      points: params.points,
+      created_at: new Date()
+    });
+
+  if (error) console.error('Erro ao criar atividade no feed:', error);
+}
+```
+
+### Service: Atualização de Engajamento
+```typescript
+// services/recipe-completion.service.ts
+
+export async function updateEngagement(
+  completionId: string,
+  userId: string,
+  data: Partial<EngagementData>
+): Promise<number> {
+  try {
+    const updates: any = { updated_at: new Date() };
+    let pointsToAdd = 0;
+
+    // Buscar estado atual
+    const { data: current } = await supabase
+      .from('recipe_completions')
+      .select('rating_points, photo_points, comment_points')
+      .eq('id', completionId)
+      .single();
+
+    // Avaliar RATING
+    if (data.rating !== undefined && current.rating_points === 0) {
+      updates.rating = data.rating;
+      updates.rating_points = 10;
+      pointsToAdd += 10;
+    }
+
+    // Avaliar FOTO
+    if (data.photoUri && current.photo_points === 0) {
+      updates.photo_url = data.photoUri;
+      updates.photo_points = 10;
+      pointsToAdd += 10;
+    }
+
+    // Avaliar COMENTÁRIO
+    if (data.comment && data.comment.length >= 20 && current.comment_points === 0) {
+      updates.comment = data.comment;
+      updates.comment_length = data.comment.length;
+      updates.comment_points = 10;
+      pointsToAdd += 10;
+    }
+
+    // Se há mudanças, atualizar
+    if (Object.keys(updates).length > 1) {
+      updates.engagement_completed_at = new Date();
+
+      const { error: updateError } = await supabase
+        .from('recipe_completions')
+        .update(updates)
+        .eq('id', completionId);
+
+      if (updateError) throw updateError;
+
+      // Adicionar pontos ao usuário
+      if (pointsToAdd > 0) {
+        const { error: pointsError } = await supabase.rpc('add_user_points', {
+          user_id: userId,
+          points: pointsToAdd,
+          source: 'recipe_engagement',
+          reference_id: completionId
+        });
+
+        if (pointsError) throw pointsError;
+      }
+    }
+
+    return pointsToAdd;
+  } catch (error) {
+    console.error('Erro ao atualizar engajamento:', error);
+    throw error;
+  }
+}
+```
+
+### Service: Buscar Progresso
+```typescript
+// services/recipe-completion.service.ts
+
+export async function getEngagementProgress(
+  completionId: string
+): Promise<EngagementProgress> {
+  const { data, error } = await supabase
+    .from('recipe_completions')
+    .select('rating_points, photo_points, comment_points')
+    .eq('id', completionId)
+    .single();
+
+  if (error) throw error;
+
+  const pointsEarned = 
+    data.rating_points + 
+    data.photo_points + 
+    data.comment_points;
+
+  return {
+    pointsEarned,
+    maxPoints: 30,
+    breakdown: {
+      rating: { 
+        completed: data.rating_points > 0, 
+        points: 10 
+      },
+      photo: { 
+        completed: data.photo_points > 0, 
+        points: 10 
+      },
+      comment: { 
+        completed: data.comment_points > 0, 
+        points: 10 
+      }
+    }
+  };
+}
+```
+
+---
+
+## COMPONENTES REACT/REACT NATIVE
+
+### Componente: Botão de Conclusão (Etapa 1)
+```typescript
+// components/RecipeCompletionButton.tsx
+
+import React from 'react';
+import { TouchableOpacity, Text, StyleSheet } from 'react-native';
+
+interface RecipeCompletionButtonProps {
+  recipeId: string;
+  onComplete: () => void;
+  loading?: boolean;
+}
+
+export const RecipeCompletionButton: React.FC<RecipeCompletionButtonProps> = ({
+  recipeId,
+  onComplete,
+  loading = false
+}) => {
+  return (
+    <TouchableOpacity
+      style={styles.button}
+      onPress={onComplete}
+      disabled={loading}
+      activeOpacity={0.8}
+    >
+      <Text style={styles.buttonText}>
+        {loading ? 'Finalizando...' : 'Finalizar Receita'}
+      </Text>
+    </TouchableOpacity>
+  );
+};
+
+const styles = StyleSheet.create({
+  button: {
+    position: 'absolute',
+    bottom: 24,
+    left: 24,
+    right: 24,
+    backgroundColor: '#D946EF', // Magenta do tema
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
+```
+
+### Tela: Confirmação (Etapa 2)
+```typescript
+// screens/RecipeCompletionConfirmation.tsx
+
+import React, { useEffect } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import LottieView from 'lottie-react-native'; // Ou biblioteca de animação preferida
+
+interface RecipeCompletionConfirmationProps {
+  recipeId: string;
+  basePoints: number;
+}
+
+export const RecipeCompletionConfirmation: React.FC<RecipeCompletionConfirmationProps> = ({
+  recipeId,
+  basePoints = 5
+}) => {
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    // Auto-avançar após 2s
+    const timer = setTimeout(() => {
+      navigation.navigate('RecipeEngagement', { recipeId });
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      <LottieView
+        source={require('@/assets/animations/success.json')}
+        autoPlay
+        loop={false}
+        style={styles.animation}
+      />
+      
+      <Text style={styles.title}>🎉 Receita concluída!</Text>
+      <Text style={styles.subtitle}>Você ganhou {basePoints} pontos</Text>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    padding: 24,
+  },
+  animation: {
+    width: 200,
+    height: 200,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginTop: 24,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#6B7280',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+});
+```
+
+### Tela: Engajamento (Etapa 3)
+```typescript
+// screens/RecipeEngagement.tsx
+
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+} from 'react-native';
+import { StarRating } from '@/components/StarRating';
+import { PhotoPicker } from '@/components/PhotoPicker';
+import { ProgressBar } from '@/components/ProgressBar';
+import { updateEngagement, getEngagementProgress } from '@/services/recipe-completion.service';
+import { EngagementProgress } from '@/types/recipe-completion';
+
+interface RecipeEngagementProps {
+  completionId: string;
+  recipeId: string;
+}
+
+export const RecipeEngagement: React.FC<RecipeEngagementProps> = ({
+  completionId,
+  recipeId
+}) => {
+  const [rating, setRating] = useState<number>(5); // Pré-selecionado
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [comment, setComment] = useState<string>('');
+  const [progress, setProgress] = useState<EngagementProgress>({
+    pointsEarned: 0,
+    maxPoints: 30,
+    breakdown: {
+      rating: { completed: false, points: 10 },
+      photo: { completed: false, points: 10 },
+      comment: { completed: false, points: 10 },
+    }
+  });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    loadProgress();
+  }, []);
+
+  const loadProgress = async () => {
+    try {
+      const data = await getEngagementProgress(completionId);
+      setProgress(data);
+    } catch (error) {
+      console.error('Erro ao carregar progresso:', error);
+    }
+  };
+
+  const handleRatingChange = async (newRating: number) => {
+    setRating(newRating);
+    if (!progress.breakdown.rating.completed) {
+      await saveEngagement({ rating: newRating });
+    }
+  };
+
+  const handlePhotoSelect = async (uri: string) => {
+    setPhoto(uri);
+    if (!progress.breakdown.photo.completed) {
+      await saveEngagement({ photoUri: uri });
+    }
+  };
+
+  const handleCommentChange = async (text: string) => {
+    setComment(text);
+    if (text.length >= 20 && !progress.breakdown.comment.completed) {
+      await saveEngagement({ comment: text });
+    }
+  };
+
+  const saveEngagement = async (data: Partial<EngagementData>) => {
+    try {
+      const pointsAdded = await updateEngagement(completionId, userId, data);
+      if (pointsAdded > 0) {
+        await loadProgress(); // Atualizar UI
+      }
+    } catch (error) {
+      console.error('Erro ao salvar engajamento:', error);
+    }
+  };
+
+  const handleComplete = async () => {
+    setLoading(true);
+    try {
+      // Salvar dados finais pendentes
+      await saveEngagement({ rating, photoUri: photo, comment });
+      // Navegar para home/feed
+      navigation.navigate('Home');
+    } catch (error) {
+      console.error('Erro ao finalizar:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getCtaLabel = () => {
+    if (progress.pointsEarned === 0) return 'Concluir';
+    return `Concluir (+${progress.pointsEarned} pontos)`;
+  };
+
+  return (
+    <View style={styles.container}>
+      <ScrollView style={styles.scrollView}>
+        {/* HEADER */}
+        <View style={styles.header}>
+          <Text style={styles.title}>💎 Quer ganhar mais pontos?</Text>
+          <Text style={styles.subtitle}>Leva menos de 1 minuto</Text>
+          
+          <ProgressBar
+            current={progress.pointsEarned}
+            max={progress.maxPoints}
+            style={styles.progressBar}
+          />
+        </View>
+
+        {/* SEÇÃO 1: AVALIAÇÃO */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>O que achou da receita?</Text>
+          <StarRating
+            rating={rating}
+            onRatingChange={handleRatingChange}
+            size={40}
+          />
+          {!progress.breakdown.rating.completed && (
+            <Text style={styles.pointsBadge}>💎 +10 pontos</Text>
+          )}
+        </View>
+
+        {/* SEÇÃO 2: FOTO */}
+        <TouchableOpacity 
+          style={styles.section}
+          onPress={() => {/* Expandir seção */}}
+        >
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>📷 Adicionar foto</Text>
+            {!progress.breakdown.photo.completed && (
+              <Text style={styles.pointsBadge}>💎 +10 pontos</Text>
+            )}
+          </View>
+          <Text style={styles.sectionSubtitle}>Mostre como ficou!</Text>
+          
+          <PhotoPicker
+            onPhotoSelect={handlePhotoSelect}
+            currentPhoto={photo}
+          />
+        </TouchableOpacity>
+
+        {/* SEÇÃO 3: COMENTÁRIO */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Comentário</Text>
+            {!progress.breakdown.comment.completed && (
+              <Text style={styles.pointsBadge}>💎 +10 pontos</Text>
+            )}
+          </View>
+          
+          <TextInput
+            style={styles.textInput}
+            placeholder="Alguma dica, modificação ou resultado?"
+            multiline
+            numberOfLines={4}
+            value={comment}
+            onChangeText={handleCommentChange}
+            maxLength={500}
+          />
+          
+          <Text style={styles.characterCounter}>
+            {comment.length}/20 caracteres
+          </Text>
+        </View>
+      </ScrollView>
+
+      {/* CTA FIXO */}
+      <TouchableOpacity
+        style={styles.ctaButton}
+        onPress={handleComplete}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <Text style={styles.ctaText}>{getCtaLabel()}</Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  header: {
+    padding: 24,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  progressBar: {
+    marginTop: 16,
+  },
+  section: {
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    marginTop: 8,
+    borderRadius: 12,
+    marginHorizontal: 16,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  pointsBadge: {
+    fontSize: 12,
+    color: '#D946EF',
+    fontWeight: '600',
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+    fontSize: 14,
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  characterCounter: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginTop: 4,
+    textAlign: 'right',
+  },
+  ctaButton: {
+    backgroundColor: '#D946EF',
+    margin: 16,
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  ctaText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
+```
+
+---
+
+## COMPONENTES AUXILIARES
+
+### ProgressBar Component
+```typescript
+// components/ProgressBar.tsx
+
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+
+interface ProgressBarProps {
+  current: number;
+  max: number;
+  style?: any;
+}
+
+export const ProgressBar: React.FC<ProgressBarProps> = ({
+  current,
+  max,
+  style
+}) => {
+  const percentage = (current / max) * 100;
+  const filledBlocks = Math.floor((current / max) * 5);
+
+  return (
+    <View style={[styles.container, style]}>
+      <View style={styles.blocksContainer}>
+        {[...Array(5)].map((_, index) => (
+          <View
+            key={index}
+            style={[
+              styles.block,
+              index < filledBlocks && styles.blockFilled
+            ]}
+          />
+        ))}
+      </View>
+      <Text style={styles.text}>
+        {current} / {max} pontos
+      </Text>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+  },
+  blocksContainer: {
+    flexDirection: 'row',
+    gap: 4,
+    marginBottom: 8,
+  },
+  block: {
+    width: 40,
+    height: 8,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 4,
+  },
+  blockFilled: {
+    backgroundColor: '#D946EF',
+  },
+  text: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+});
+```
+
+### StarRating Component
+```typescript
+// components/StarRating.tsx
+
+import React from 'react';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import Icon from 'react-native-vector-icons/MaterialIcons';
+
+interface StarRatingProps {
+  rating: number;
+  onRatingChange: (rating: number) => void;
+  size?: number;
+}
+
+export const StarRating: React.FC<StarRatingProps> = ({
+  rating,
+  onRatingChange,
+  size = 32
+}) => {
+  return (
+    <View style={styles.container}>
+      {[1, 2, 3, 4, 5].map((star) => (
+        <TouchableOpacity
+          key={star}
+          onPress={() => onRatingChange(star)}
+          activeOpacity={0.7}
+        >
+          <Icon
+            name={star <= rating ? 'star' : 'star-border'}
+            size={size}
+            color={star <= rating ? '#FBBF24' : '#D1D5DB'}
+          />
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    gap: 8,
+    marginVertical: 12,
+  },
+});
+```
+
+### PhotoPicker Component
+```typescript
+// components/PhotoPicker.tsx
+
+import React from 'react';
+import { View, TouchableOpacity, Image, Text, StyleSheet } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import Icon from 'react-native-vector-icons/MaterialIcons';
+
+interface PhotoPickerProps {
+  onPhotoSelect: (uri: string) => void;
+  currentPhoto: string | null;
+}
+
+export const PhotoPicker: React.FC<PhotoPickerProps> = ({
+  onPhotoSelect,
+  currentPhoto
+}) => {
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    
+    if (status !== 'granted') {
+      alert('Precisamos de permissão para acessar suas fotos');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      onPhotoSelect(result.assets[0].uri);
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      {currentPhoto ? (
+        <View style={styles.photoContainer}>
+          <Image source={{ uri: currentPhoto }} style={styles.photo} />
+          <TouchableOpacity
+            style={styles.changeButton}
+            onPress={pickImage}
+          >
+            <Text style={styles.changeButtonText}>Alterar foto</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <TouchableOpacity style={styles.uploadButton} onPress={pickImage}>
+          <Icon name="add-a-photo" size={32} color="#9CA3AF" />
+          <Text style={styles.uploadText}>Adicionar foto</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    marginTop: 12,
+  },
+  photoContainer: {
+    alignItems: 'center',
+  },
+  photo: {
+    width: '100%',
+    height: 200,
+    borderRadius: 12,
+  },
+  changeButton: {
+    marginTop: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+  },
+  changeButtonText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  uploadButton: {
+    borderWidth: 2,
+    borderColor: '#E5E7EB',
+    borderStyle: 'dashed',
+    borderRadius: 12,
+    padding: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#9CA3AF',
+  },
+});
+```
+
+---
+
+## FUNÇÕES RPC DO SUPABASE
+
+### RPC: Adicionar Pontos ao Usuário
+```sql
+-- functions/add_user_points.sql
+
+CREATE OR REPLACE FUNCTION add_user_points(
+  user_id UUID,
+  points INTEGER,
+  source TEXT,
+  reference_id UUID
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  -- Adicionar pontos ao saldo do usuário
+  UPDATE users
+  SET 
+    total_points = COALESCE(total_points, 0) + points,
+    updated_at = NOW()
+  WHERE id = user_id;
+
+  -- Registrar transação de pontos
+  INSERT INTO points_transactions (
+    user_id,
+    points,
+    source,
+    reference_id,
+    created_at
+  ) VALUES (
+    user_id,
+    points,
+    source,
+    reference_id,
+    NOW()
+  );
+END;
+$$;
+```
+
+### Tabela de Transações de Pontos
+```sql
+CREATE TABLE points_transactions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES users(id) NOT NULL,
+  points INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  reference_id UUID,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_points_transactions_user ON points_transactions(user_id);
+CREATE INDEX idx_points_transactions_source ON points_transactions(source);
+```
+
+---
+
+## DIRETRIZES DE COPY
+
+### ❌ EVITAR (Tom Burocrático)
+- "Ganhe até..."
+- "Opcional"
+- "Mais pontos disponíveis"
+- "Complete para..."
+- "Maximize seus pontos"
+
+### ✅ USAR (Tom Convidativo)
+- "Leva menos de 1 minuto"
+- "Quer compartilhar sua experiência?"
+- "Ajude a comunidade"
+- "Mostre como ficou!"
+- "O que achou?"
+
+**PRINCÍPIO:** Gamificação como consequência natural, não como transação.
+
+---
+
+## MÉTRICAS DE SUCESSO
+
+### KPIs Primários
+```typescript
+// analytics/recipe-completion-metrics.ts
+
+export interface CompletionMetrics {
+  // Taxa de conclusão
+  totalRecipesViewed: number;
+  totalRecipesCompleted: number;
+  completionRate: number; // %
+  
+  // Engajamento na Etapa 3
+  totalEngagementScreenViews: number;
+  totalWithRating: number;
+  totalWithPhoto: number;
+  totalWithComment: number;
+  totalFullEngagement: number; // Todos os 3
+  
+  // Distribuição de pontos
+  pointsDistribution: {
+    points5: number;  // Só conclusão
+    points15: number; // Conclusão + 1 item
+    points25: number; // Conclusão + 2 itens
+    points35: number; // Conclusão + todos
+  };
+  
+  // Tempo médio
+  avgTimeOnEngagementScreen: number; // segundos
+  
+  // Taxa de abandono
+  abandonmentRate: {
+    duringRecipe: number;    // %
+    onConfirmation: number;  // %
+    onEngagement: number;    // %
+  };
+}
+```
+
+### Queries de Análise
+```sql
+-- Métrica: Taxa de conclusão geral
+SELECT 
+  COUNT(DISTINCT recipe_id) as recipes_viewed,
+  COUNT(DISTINCT CASE WHEN completed_at IS NOT NULL THEN recipe_id END) as recipes_completed,
+  (COUNT(DISTINCT CASE WHEN completed_at IS NOT NULL THEN recipe_id END)::FLOAT / 
+   COUNT(DISTINCT recipe_id) * 100) as completion_rate
+FROM recipe_views
+WHERE created_at >= NOW() - INTERVAL '7 days';
+
+-- Métrica: Distribuição de pontos
+SELECT 
+  total_points,
+  COUNT(*) as count,
+  (COUNT(*)::FLOAT / SUM(COUNT(*)) OVER () * 100) as percentage
+FROM recipe_completions
+WHERE created_at >= NOW() - INTERVAL '7 days'
+GROUP BY total_points
+ORDER BY total_points;
+
+-- Métrica: Taxa de engajamento completo
+SELECT 
+  COUNT(*) FILTER (WHERE rating IS NOT NULL) as with_rating,
+  COUNT(*) FILTER (WHERE photo_url IS NOT NULL) as with_photo,
+  COUNT(*) FILTER (WHERE comment IS NOT NULL) as with_comment,
+  COUNT(*) FILTER (WHERE 
+    rating IS NOT NULL AND 
+    photo_url IS NOT NULL AND 
+    comment IS NOT NULL
+  ) as full_engagement,
+  COUNT(*) as total_completions
+FROM recipe_completions
+WHERE created_at >= NOW() - INTERVAL '7 days';
+```
+
+---
+
+## HIPÓTESES A VALIDAR
+
+### Hipótese 1: Separação de Fluxos
+**H1:** Separar conclusão de engajamento aumentará taxa de conclusão total em 15%+
+
+**Métrica:** 
+```
+baseline_completion_rate = (conclusões / visualizações) antes
+new_completion_rate = (conclusões / visualizações) depois
+improvement = ((new - baseline) / baseline) * 100
+```
+
+### Hipótese 2: Pré-seleção de 5 Estrelas
+**H2:** Pré-selecionar 5★ não reduzirá qualidade média das avaliações
+
+**Métrica:**
+```
+baseline_avg_rating = AVG(rating) com sistema atual
+new_avg_rating = AVG(rating) com 5★ pré-selecionado
+difference = new_avg_rating - baseline_avg_rating
+
+Sucesso se: difference >= -0.3
+```
+
+### Hipótese 3: Progresso Visual
+**H3:** Barra de progresso visual aumentará taxa de engajamento completo em 20%+
+
+**Métrica:**
+```
+full_engagement_rate = (
+  conclusões com rating + foto + comentário
+) / total de conclusões
+
+Comparar: versão A (sem barra) vs versão B (com barra)
+```
+
+### Hipótese 4: CTA Dinâmico
+**H4:** CTA com pontos dinâmicos motivará preenchimento de mais campos
+
+**Métrica:**
+```
+avg_fields_completed = AVG(
+  (rating IS NOT NULL)::INT +
+  (photo_url IS NOT NULL)::INT +
+  (comment IS NOT NULL)::INT
+)
+
+Comparar antes/depois
+```
+
+---
+
+## FASES DE IMPLEMENTAÇÃO
+
+### FASE 1: Backend e Dados (Semana 1)
+```
+□ Criar tabela recipe_completions
+□ Criar tabela points_transactions
+□ Implementar função add_user_points
+□ Implementar service completeRecipe()
+□ Implementar service updateEngagement()
+□ Implementar service getEngagementProgress()
+□ Criar índices de performance
+□ Testes unitários de regras de pontuação
+□ Testes de integridade de transações
+```
+
+### FASE 2: UI - Fluxo Base (Semana 2)
+```
+□ Componente RecipeCompletionButton
+□ Tela RecipeCompletionConfirmation
+□ Animação de celebração
+□ Navegação entre telas
+□ Integração com backend (conclusão básica)
+□ Testes de fluxo completo
+□ Ajustes de UX baseados em testes internos
+```
+
+### FASE 3: UI - Engajamento (Semanas 3-4)
+```
+□ Tela RecipeEngagement (estrutura)
+□ Componente StarRating
+□ Componente PhotoPicker
+□ Componente ProgressBar
+□ Input de comentário com validação
+□ Lógica de auto-save incremental
+□ CTA dinâmico
+□ Testes de todos os componentes
+□ Testes de fluxo end-to-end
+```
+
+### FASE 4: Polimento e Testes (Semana 5)
+```
+□ Ajustes de copy final
+□ Refinamento de animações
+□ Otimização de performance
+□ Testes de acessibilidade
+□ Testes em dispositivos reais
+□ Setup de analytics
+□ Beta testing com usuários selecionados
+□ Ajustes baseados em feedback
+```
+
+### FASE 5: Deploy e Monitoramento (Semana 6)
+```
+□ Deploy gradual (10% → 50% → 100%)
+□ Monitoramento de métricas em tempo real
+□ Comparação A/B com fluxo antigo
+□ Coleta de feedback qualitativo
+□ Ajustes rápidos se necessário
+□ Documentação final
+```
+
+---
+
+## CONSIDERAÇÕES TÉCNICAS IMPORTANTES
+
+### Performance
+- Upload de fotos deve ser assíncrono (não bloquear UI)
+- Cache de progresso local para evitar múltiplas queries
+- Debounce no input de comentário (evitar saves excessivos)
+- Otimizar queries com índices apropriados
+
+### Segurança
+- Validar pontos no backend (nunca confiar no frontend)
+- Prevenir duplicatas com UNIQUE constraint
+- Rate limiting em uploads de fotos
+- Sanitização de comentários
+
+### Acessibilidade
+- Labels adequados em todos os inputs
+- Suporte a screen readers
+- Contraste de cores WCAG AA
+- Tamanho de toque mínimo 44x44pt
+
+### Edge Cases
+- Perda de conexão durante upload
+- Múltiplos dispositivos do mesmo usuário
+- Receitas já concluídas (não permitir re-conclusão)
+- Fotos muito grandes (compressão automática)
+- Comentários com caracteres especiais
+
+---
+
+## ROLLBACK PLAN
+
+Se métricas indicarem problema:
+
+1. **Critérios de rollback:**
+   - Completion rate cai > 10%
+   - Crash rate aumenta > 2%
+   - Feedback negativo > 30% dos usuários
+
+2. **Processo:**
+   - Reverter para fluxo anterior via feature flag
+   - Manter dados coletados (não deletar)
+   - Analisar logs de erro
+   - Ajustar e re-testar
+
+3. **Comunicação:**
+   - Notificar time de produto
+   - Documentar problemas encontrados
+   - Criar plano de correção
+
+---
+
+## PRÓXIMOS PASSOS APÓS IMPLEMENTAÇÃO
+
+1. **Iteração 1:** Sistema de badges por conquistas
+2. **Iteração 2:** Feed social de receitas concluídas
+3. **Iteração 3:** Gamificação de sequências (streaks)
+4. **Iteração 4:** Recompensas por níveis de pontuação
+
+---
+
+FIM DO BRIEFING
